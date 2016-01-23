@@ -1,0 +1,188 @@
+x<-c("stringr","dplyr")
+lapply(x, require, character.only=T)
+
+drive=c("U:\\ACERB\\ACES\\Keita temporary file\\USC Source Apportionment")
+#drive=c('K:\\Research\\PMSource_Still\\Data')
+setwd(drive)
+
+temp=data.frame(seq(1:8),c('BAK','FRE','ELC','LAX','RUB','SAC','SJO','SVY'),c(3146,3009,2327,2899,2596,2731,3661,2880))
+names(temp)=c('loca','Name','Site')
+temp$Name=as.character(temp$Name)
+
+PM25=read.csv("totpm25.csv") %>%
+	mutate(date2=paste('0',date,sep=''),loca=as.numeric(loca)) %>%
+	mutate(date=as.Date(paste(str_sub(date2,start=-4),str_sub(date2,-8,-7),str_sub(date2,-6,-5),sep=''),format="%Y%m%d")) %>%
+	select(-date2) %>%
+	right_join(temp,by='loca') %>%
+	select(Name,Site,date,loca,totpm25)
+
+PM25_Source=read.csv("sources.csv",stringsAsFactors=FALSE) %>%
+	mutate(date2=paste('0',date,sep=''),loca=as.numeric(loca),
+		secsulf=as.numeric(secsulf),sufroad=as.numeric(sufroad),soil=as.numeric(soil),
+		cln=as.numeric(cln),salt=as.numeric(salt),fsalt=as.numeric(fsalt),asalt=as.numeric(asalt),
+		cuprod=as.numeric(cuprod),cusmelt=as.numeric(cusmelt),niind=as.numeric(niind),ind=as.numeric(ind)) %>%
+	mutate(date=as.Date(paste(str_sub(date2,start=-4),str_sub(date2,-8,-7),str_sub(date2,-6,-5),sep=''),format="%Y%m%d")) %>%
+	select(-date2)
+
+#Join Monitor Info
+AllMon=read_excel("M:\\Atesgis\\Calfine_Data\\Exposure\\Monitor\\Raw Data\\PM25_not_speciated\\ARB website extract January 2014\\location.xls") %>%
+	data.frame %>%
+	filter(!is.na(Latitude),!is.na(Long.Degrees),!is.na(County),!is.na(Site)) %>%
+	select(Site,Latitude,Longitude)
+
+#Join Everything
+data1=inner_join(PM25,PM25_Source,by=c('date','loca')) %>%
+	mutate(sumrow=rowSums(.[6:19],na.rm = TRUE),Diff=totpm25-sumrow) %>%
+	inner_join(AllMon,by='Site') %>%
+	arrange(Name,date)
+
+##Check Frequency of each monitor
+data1$n=sequence(rle(data1$Name)$lengths)
+First_Date=data.frame(data1[!duplicated(data1$Name),c('Name','date')])
+names(First_Date)[2]='FirstObsDate'
+Last_Date=data.frame(data1[!duplicated(data1$Name,fromLast=TRUE),c('Name','date','n')])
+names(Last_Date)[2]='LastObsDate'
+Obs_List=merge(First_Date,Last_Date,by='Name') %>%
+		mutate(PeriodLength=as.numeric(LastObsDate-FirstObsDate),Freq=PeriodLength/n)
+
+## check Basic Trend
+summary(data1$Diff)
+quantile(data1$Diff, c(.01,.05,0.10,0.9,0.95,0.99)) 
+group_by(data1,Name) %>%
+	summarize(.,AvePM=mean(totpm25),Ave_Diff=mean(Diff,na.rm=TRUE),Max_Diff=max(Diff),Min_Diff=min(Diff))
+
+# Create GGPLOT for trend
+
+BAK=filter(data1,Name=='RUB') %>%
+	mutate(Year_f=as.factor(substr(date,1,4)),
+		MonthDay_num=as.numeric(format(date,'%j')),
+		MonthName=factor(months(date,abbreviate=TRUE)))
+BAK$Period=cut(as.numeric(substr(BAK$date,1,4)),c(seq(2002,2009,2),2010),
+	labels=c('2002-2003','2004-2005','2006-2007','2008-2009'),right=FALSE,include.highest=TRUE)
+
+
+title=expression(PM[2.5]*' Trend by Period in BAK')
+Y_title=expression(PM[2.5]*' Value')
+ylims = with(data1, c(floor(min(totpm25)), ceiling(max(totpm25))))
+Legend=data.frame(BAK[!duplicated(BAK$MonthName),c('MonthName','MonthDay_num')])
+
+PM25_BAK=ggplot()+
+	geom_point(data=BAK,aes(x=MonthDay_num,y=totpm25,col=Period))+
+	scale_x_continuous('Month',breaks=Legend$MonthDay_num,labels=Legend$MonthName,expand=c(0,0))+
+	scale_y_continuous(Y_title)+
+	ggtitle(title)+
+	coord_cartesian(ylim=ylims)+
+	theme_bw()
+
+PM25_BAK_L=ggplot(data=BAK,aes(x=MonthDay_num,y=totpm25,col=Period))+
+	geom_smooth(span=0.4,method='loess',size=2.5,se=FALSE)+
+	scale_x_continuous('Month',breaks=Legend$MonthDay_num,labels=Legend$MonthName,expand=c(0,0))+
+	scale_y_continuous(Y_title)+
+	ggtitle(title)+
+	coord_cartesian(ylim=ylims)+
+	theme_bw()
+
+title=expression(PM[2.5]*' Secondary Sulfate Trend by Period in BAK')
+Y_title=expression(PM[2.5]*' Secondary Sulfate  Value')
+ylims = with(data1, c(floor(min(totpm25)), ceiling(max(totpm25))))
+
+secsulf_BAK_L=ggplot(data=BAK,aes(x=MonthDay_num,y=secsulf,col=Period))+
+	geom_smooth(span=0.4,method='loess',size=2.5,se=FALSE)+
+	scale_x_continuous('Month',breaks=Legend$MonthDay_num,labels=Legend$MonthName,expand=c(0,0))+
+	scale_y_continuous(Y_title)+
+	ggtitle(title)+
+	coord_cartesian(ylim=c(0,10))+
+	theme_bw()
+
+title=expression(PM[2.5]*' Secondary Nitrate Trend by Period in BAK')
+Y_title=expression(PM[2.5]*' Secondary Nitrate  Value')
+ylims = with(data1, c(floor(min(secnit)), ceiling(max(secnit))))
+
+secnit_BAK_L=ggplot(data=BAK,aes(x=MonthDay_num,y=secnit,col=Period))+
+	geom_smooth(span=0.4,method='loess',size=2.5,se=FALSE)+
+	scale_x_continuous('Month',breaks=Legend$MonthDay_num,labels=Legend$MonthName,expand=c(0,0))+
+	scale_y_continuous(Y_title)+
+	ggtitle(title)+
+	coord_cartesian(ylim=ylims)+
+	theme_bw()
+
+title=expression(PM[2.5]*' Vehicle Emission  Trend by Period in BAK')
+Y_title=expression(PM[2.5]*' Vehicle Emission  Value')
+ylims = with(data1, c(floor(min(vehic)), ceiling(max(vehic))))
+
+vehic_BAK_L=ggplot(data=BAK,aes(x=MonthDay_num,y=vehic,col=Period))+
+	geom_smooth(span=0.4,method='loess',size=2.5,se=FALSE)+
+	scale_x_continuous('Month',breaks=Legend$MonthDay_num,labels=Legend$MonthName,expand=c(0,0))+
+	scale_y_continuous(Y_title)+
+	ggtitle(title)+
+	coord_cartesian(ylim=ylims)+
+	theme_bw()
+
+
+Plot_Trend=function(city,firstyr,lastyr){
+	city_file=filter(data1,Name==city) %>%
+		mutate(Year_f=as.factor(substr(date,1,4)),
+			MonthDay_num=as.numeric(format(date,'%j')),
+			MonthName=factor(months(date,abbreviate=TRUE)))
+	city_fil$Period=cut(as.numeric(substr(city_fil$date,1,4)),c(seq(2002,lastyear,2),lastyear+1),
+		labels=c('2002-2003','2004-2005','2006-2007','2008-2009'),right=FALSE,include.highest=TRUE)
+}
+
+CityName=unique(data1$Name)
+Plot_Trend=function(i){
+	city_file=filter(data1,Name==CityName[i]) %>%
+			mutate(Year_f=as.factor(substr(date,1,4)),
+			MonthDay_num=as.numeric(format(date,'%j')),
+			MonthName=factor(months(date,abbreviate=TRUE)))
+	return(head(city_file))
+
+}
+Plot_Trend(i=7)
+
+
+
+CityName=unique(data1$Name)
+polyname
+polvarname=c('Total','Second Sulfate','Sulfate Road Dust','Second Nitrate')
+
+Plot_Trend=function(City_str,polyname){
+	city_file=filter(data1,Name==City_str) %>%
+			mutate(Year_f=as.factor(substr(date,1,4)),
+			MonthDay_num=as.numeric(format(date,'%j')),
+			MonthName=factor(months(date,abbreviate=TRUE)))
+	first_year=sort(unique(as.numeric(as.character(substr(city_file$date,1,4)))))[[1]]
+	last_year=sort(unique(as.numeric(substr(city_file$date,1,4))),decreasing=TRUE)[[1]]
+	city_file$Period=cut(as.numeric(substr(city_file$date,1,4)),c(seq(first_year,last_year,2),last_year+1),
+		,right=FALSE,include.highest=TRUE)
+	city_file=mutate(city_file,Period=paste(substr(Period,2,5),'-',as.numeric(substr(Period,7,10))-1,sep=''))
+
+Plot_gg=ggplot()+
+	geom_point(data=city_file,aes_string(x="MonthDay_num",y=polyname,col="Period"))+
+	scale_x_continuous('Month',breaks=Legend$MonthDay_num,labels=Legend$MonthName,expand=c(0,0))+
+#	scale_y_continuous(Y_title)+
+	ggtitle(title)+
+	coord_cartesian(ylim=ylims)+
+	theme_bw()
+
+jj=which(colnames(city_file)==polyname)
+title=expression(paste(PM[2.5],' Trend in', City_st,sep=''))
+substitute(expression(PM[2.5]),City, list(City=City_str))) 
+title=bquote(PM[2.5] .(City_st))
+#title=expression(PM[2.5]*' Trend by Period in BAK')
+Y_title=expression(PM[2.5]*' Value')
+ylims = with(city_file, c(floor(min(city_file[,jj])), ceiling(max(city_file[,jj]))))
+Legend=data.frame(city_file[!duplicated(city_file$MonthName),c('MonthName','MonthDay_num')])
+
+title=bquote(.(polvarname[1])*PM[2.5])
+xlab <- bquote(.(labNames[1]) ~ x^2)
+
+	return(head(city_file))
+
+}
+Plot_Trend(City_str="RUB")
+
+
+
+
+rm(list=ls())
+q()
