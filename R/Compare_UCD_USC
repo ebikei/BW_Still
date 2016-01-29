@@ -1,0 +1,106 @@
+x<-c("dplyr",'ggplot2','gridExtra',"grid")
+lapply(x, require, character.only=T)
+
+load('OrigPMFine_Data.RData') #OrigPMFine_Data
+load('EightMonitor_Grid.RData')#EightMonitor_Grid
+
+
+data1=mutate(OrigPMFine_Data,ID=paste(area,'_',sprintf("%03d",GridX),'_',sprintf("%03d",GridY),sep=''),
+			YearMonth=as.Date(paste(year,'-',sprintf("%02d",month),'-15',sep=''),format="%Y-%m-%d")) %>%
+	filter(ID %in% EightMonitor_Grid$ID) %>%
+	data.frame() %>%
+	select(ID,YearMonth,area,PM2.5MASS,PM2.5Cu,PM2.5Fe,PM2.5Mn,PM2.5N.V.,PM2.5N..III.,PM2.5Na.,PM2.5EC,
+		PM2.5OC,PM2.5Other,PM2.5Metals,PM2.5Tracer1,PM2.5Tracer2,PM2.5Tracer3,PM2.5Tracer4,PM2.5Tracer5,
+		PM2.5Tracer6,PM2.5Tracer7,PM2.5Tracer8,PM2.5Tracer9,PM2.5AALK,PM2.5AXYL,PM2.5ATOL,PM2.5ABNZ,
+		PM2.5ABIO,PM2.5AOLG) %>%
+	arrange(ID,YearMonth) %>%
+	mutate(Sum_Chemi=rowSums(.[5:14],na.rm =TRUE),Diff1=PM2.5MASS-Sum_Chemi,Sum_Source=rowSums(.[15:29],na.rm =TRUE),Diff2=PM2.5MASS-Sum_Source) %>%
+	inner_join(EightMonitor_Grid,by='ID')
+
+summary(data1$Diff1)
+summary(data1$Diff2)
+
+rm(OrigPMFine_Data)
+	
+TotPM25_USC=read.csv("K:\\Research\\PMSource_Still\\Data\\totpm25.csv") %>%
+	mutate(date2=paste('0',date,sep=''),date=as.Date(paste(str_sub(date2,start=-4),str_sub(date2,-8,-7),str_sub(date2,-6,-5),sep=''),format="%Y%m%d"),YM=substr(date,1,7)) %>%
+	select(-date2)
+TotPM25_USC_2=aggregate(totpm25~loca+YM,TotPM25_USC,mean,na.rm=TRUE) %>%
+	rename(USC_totpm25=totpm25) %>%
+	mutate(YearMonth=as.Date(paste(substr(YM,1,4),'-',substr(YM,6,7),'-15',sep=''),format="%Y-%m-%d")) %>%
+	select(-YM)
+
+
+#Overall Correlation
+warm=c('May','Jun','Jul','Aug','Sep','Oct')
+data2=inner_join(data1,TotPM25_USC_2,by=c('YearMonth','loca')) %>%
+	mutate(Year=substr(YearMonth,1,4),Season=ifelse(format(YearMonth,"%b") %in% warm,'Warm','Cold'))
+
+#Overall correlation
+cor(data2$PM2.5MASS,data2$USC_totpm25)
+cor_val=cor(data2$PM2.5MASS,data2$USC_totpm25) %>% data.frame
+##GG plot
+xlegend=substitute(paste('USC ',PM[2.5],' Observed Value'))
+ylegend=substitute(paste('UC Davis ',PM[2.5],' Estimated Value'))
+title='Scatter plot betwen USC Observed value and UCD Estimated Value'
+#Overall Scatterplot
+sca_1=ggplot(data2, aes(x=USC_totpm25,y=PM2.5MASS)) +
+	geom_point(shape=16) +  
+	#geom_smooth(method=lm,se=FALSE) +
+	geom_abline(intercept=0,slope=1,lwd=1,col='blue')+
+	coord_cartesian(ylim=c(0,70))+
+	coord_cartesian(xlim=c(0,70))+
+	scale_x_continuous(xlegend)+
+	scale_y_continuous(ylegend)+
+	ggtitle(title)+
+	geom_text(x=5,y=45,label=paste("r=",round(cor_val,2),sep=''),size=6,fontface=3)+
+	theme_bw()
+sca_1
+
+#Corerlation by Site
+gp=group_by(data2,SiteName)
+dplyr::summarize(gp,cor(PM2.5MASS,USC_totpm25))
+
+gp=group_by(data2,area.x)
+dplyr::summarize(gp,cor(PM2.5MASS,USC_totpm25))
+
+gp=group_by(data2,Year)
+dplyr::summarize(gp,cor(PM2.5MASS,USC_totpm25))
+
+gp=group_by(data2,Season)
+dplyr::summarize(gp,cor(PM2.5MASS,USC_totpm25))
+
+## GG plot by Site
+Sca_Site=function(ii){
+	data3=filter(data2,loca==ii)
+	cor_val=cor(data3$PM2.5MASS,data3$USC_totpm25) %>% data.frame
+
+	xlegend=substitute(paste('USC ',PM[2.5],' Observed Value'))
+	ylegend=substitute(paste('UC Davis ',PM[2.5],' Estimated Value'))
+	title=paste('Scatter plot in ',unique(data3$SiteName),' (',unique(data3$area.x),')',sep='')
+
+	gplo=ggplot(data3,aes(x=USC_totpm25,y=PM2.5MASS)) +
+	geom_point(shape=16)+
+	geom_abline(intercept=0,slope=1,lwd=1,col='blue')+
+	coord_cartesian(ylim=c(0,70),xlim=c(0,70))+
+	scale_x_continuous(xlegend)+
+	scale_y_continuous(ylegend)+
+	ggtitle(title)+
+	geom_text(x=5,y=45,label=paste("r=",round(cor_val,2),sep=''),size=6,fontface=3)+
+	theme_bw()
+
+	return(gplo)
+}
+
+
+OutList=list(Sca_Site(1),Sca_Site(2),Sca_Site(3),Sca_Site(4),Sca_Site(5),Sca_Site(6),Sca_Site(7),Sca_Site(8))
+Scatter_Out=do.call(arrangeGrob,c(OutList,nrow=3))
+#grid.draw(Scatter_Out)
+
+pdf('C:\\Users\\kebisu\\Downloads\\USC_UCD_ScatterPlot.pdf',15,10)
+	grid.draw(sca_1)
+	grid.newpage()
+	grid.draw(Scatter_Out)
+dev.off()
+
+rm(list=ls())
