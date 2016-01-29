@@ -1,0 +1,137 @@
+x<-c("plyr","stringr","dplyr","readxl","ggplot2","gridExtra","grid","reshape2")
+lapply(x, require, character.only=T)
+
+#drive=c("U:\\ACERB\\ACES\\Keita temporary file\\USC Source Apportionment")
+drive=c('K:\\Research\\PMSource_Still\\Data')
+setwd(drive)
+
+temp=data.frame(seq(1:8),c('BAK','FRE','ELC','LAX','RUB','SAC','SJO','SVY'),c(3146,3009,2327,2899,2596,2731,3661,2880))
+names(temp)=c('loca','Name','Site')
+temp$Name=as.character(temp$Name)
+
+PM25=read.csv("totpm25.csv") %>%
+	mutate(date2=paste('0',date,sep=''),loca=as.numeric(loca)) %>%
+	mutate(date=as.Date(paste(str_sub(date2,start=-4),str_sub(date2,-8,-7),str_sub(date2,-6,-5),sep=''),format="%Y%m%d")) %>%
+	select(-date2) %>%
+	right_join(temp,by='loca') %>%
+	select(Name,Site,date,loca,totpm25)
+
+PM25_Source=read.csv("sources.csv",stringsAsFactors=FALSE) %>%
+	mutate(date2=paste('0',date,sep=''),loca=as.numeric(loca),
+		secsulf=as.numeric(secsulf),sufroad=as.numeric(sufroad),soil=as.numeric(soil),
+		cln=as.numeric(cln),salt=as.numeric(salt),fsalt=as.numeric(fsalt),asalt=as.numeric(asalt),
+		cuprod=as.numeric(cuprod),cusmelt=as.numeric(cusmelt),niind=as.numeric(niind),ind=as.numeric(ind)) %>%
+	mutate(date=as.Date(paste(str_sub(date2,start=-4),str_sub(date2,-8,-7),str_sub(date2,-6,-5),sep=''),format="%Y%m%d")) %>%
+	select(-date2)
+
+#Join Monitor Info
+AllMon=read_excel("M:\\Atesgis\\Calfine_Data\\Exposure\\Monitor\\Raw Data\\PM25_not_speciated\\ARB website extract January 2014\\location.xls") %>%
+	data.frame %>%
+	filter(!is.na(Latitude),!is.na(Long.Degrees),!is.na(County),!is.na(Site)) %>%
+	select(Site,Latitude,Longitude)
+
+#Join Everything
+data1=inner_join(PM25,PM25_Source,by=c('date','loca')) %>%
+	mutate(sumrow=rowSums(.[6:19],na.rm = TRUE),Diff=totpm25-sumrow) %>%
+	inner_join(AllMon,by='Site') %>%
+	arrange(Name,date)
+
+##Check Frequency of each monitor
+data1$n=sequence(rle(data1$Name)$lengths)
+First_Date=data.frame(data1[!duplicated(data1$Name),c('Name','date')])
+names(First_Date)[2]='FirstObsDate'
+Last_Date=data.frame(data1[!duplicated(data1$Name,fromLast=TRUE),c('Name','date','n')])
+names(Last_Date)[2]='LastObsDate'
+Obs_List=merge(First_Date,Last_Date,by='Name') %>%
+		mutate(PeriodLength=as.numeric(LastObsDate-FirstObsDate),Freq=PeriodLength/n)
+
+## check Basic Trend
+summary(data1$Diff)
+quantile(data1$Diff, c(.01,.05,0.10,0.9,0.95,0.99)) 
+group_by(data1,Name) %>%
+	summarize(.,AvePM=mean(totpm25),Ave_Diff=mean(Diff,na.rm=TRUE),Max_Diff=max(Diff),Min_Diff=min(Diff))
+
+#Plot_Trend=function(City_str,polyname){
+
+data2=data1 %>%
+	group_by(Name) %>%
+	summarize(Ave_totpm25=mean(totpm25),Ave_secsulf=mean(secsulf),Ave_sufroad=mean(sufroad),Ave_secnit=mean(secnit),
+	Ave_vehic=mean(vehic),Ave_biomass=mean(biomass),Ave_soil=mean(soil),Ave_cln=mean(cln),Ave_salt=mean(salt),
+	Ave_fsalt=mean(fsalt),Ave_asalt=mean(asalt),Ave_cuprod=mean(cuprod),Ave_cusmelt=mean(cusmelt),
+	Ave_niind=mean(niind)) %>%
+	data.frame() %>%
+	mutate(sumrow=rowSums(.[3:15],na.rm = TRUE),Diff=Ave_totpm25-sumrow)
+
+data3=select(data2,-Ave_totpm25,-sumrow,-Diff) %>%
+	reshape(varying=c(2:14), direction="long", idvar="Name", sep="_", timevar = "Source") %>%
+	arrange(Name,Source)
+
+data4=select(data2,Name,Ave_totpm25) %>%
+	inner_join(.,data3,by='Name') %>%
+	na.omit() %>%
+	mutate(temp=Ave*100/Ave_totpm25,Percent=paste(round(Ave*100/Ave_totpm25,1),"%",sep=''))
+
+data5=ddply(data4,.(Name),transform,pos=cumsum(Ave)-0.5*Ave)
+
+Plot1=ggplot(data5,aes(Name,Ave,fill=Source))+geom_bar(stat="identity")+
+	scale_y_continuous(substitute(paste(PM[2.5],' Value')))+
+	ggtitle("Source Contribution by City")+
+	theme_bw()+
+	geom_text(aes(label=Percent,y=pos),size=3)
+Plot1
+
+## Season Stratified
+warm=c('May','Jun','Jul','Aug','Sep','Oct')
+data6=mutate(data1,Season=ifelse(format(date,"%b") %in% warm,'Warm','Cold'))
+colors_sche=data.frame(c('asalt','biomass','cln','cuprod','cusmelt','fsalt','niind','salt','secnit','secsulf','soil','sufroad','vehic'),
+	c('#c994c7','#31a354','#de2d26','#e6550d','#d95f0e','#3182bd','#636363','#43a2ca','#ef8a62','#fec44f','#756bb1','#c994c7','#dd1c77'))
+names(colors_sche)=c('Source','Col')
+#Function
+
+BarPlo=function(CityName){
+	data7=filter(data6,Name==CityName) %>%
+		group_by(Season) %>%
+		summarize(Ave_totpm25=mean(totpm25),Ave_secsulf=mean(secsulf),Ave_sufroad=mean(sufroad),Ave_secnit=mean(secnit),
+		Ave_vehic=mean(vehic),Ave_biomass=mean(biomass),Ave_soil=mean(soil),Ave_cln=mean(cln),Ave_salt=mean(salt),
+		Ave_fsalt=mean(fsalt),Ave_asalt=mean(asalt),Ave_cuprod=mean(cuprod),Ave_cusmelt=mean(cusmelt),
+		Ave_niind=mean(niind)) %>%
+		data.frame() %>%
+		mutate(sumrow=rowSums(.[3:15],na.rm = TRUE),Diff=Ave_totpm25-sumrow)
+	print(data7$Diff)
+
+	data8=select(data7,-Ave_totpm25,-sumrow,-Diff) %>%
+		reshape(varying=c(2:14), direction="long", idvar="Season", sep="_", timevar = "Source") %>%
+		arrange(Season,Source) %>%
+		merge(colors_sche,by='Source')
+	data9=select(data7,Season,Ave_totpm25) %>%
+		inner_join(.,data8,by='Season') %>%
+		na.omit() %>%
+		mutate(temp=Ave*100/Ave_totpm25,Percent=paste(round(Ave*100/Ave_totpm25,1),"%",sep=''))
+
+	data10=ddply(data9,.(Season),transform,pos=cumsum(Ave)-0.5*Ave)
+
+	Plot_gg=ggplot(data10,aes(Season,Ave,fill=Source))+geom_bar(stat="identity")+
+		#scale_fill_manual(values=unique(data10$Col))+
+		scale_y_continuous(substitute(paste(PM[2.5],' Value')))+
+		ggtitle(paste(CityName," Source Contribution by Season",sep=''))+
+		theme_bw()+
+		geom_text(aes(label=Percent,y=pos),size=3)
+		
+	return(Plot_gg)
+}
+
+BarPlot_List=list(
+BarPlo(CityName='BAK'),BarPlo(CityName='ELC'),BarPlo(CityName='FRE'),BarPlo(CityName='LAX'),
+BarPlo(CityName='RUB'),BarPlo(CityName='SAC'),BarPlo(CityName='SJO'),BarPlo(CityName='SVY')
+)
+
+BarPlot=do.call(arrangeGrob,c(BarPlot_List,nrow=2))
+grid.draw(BarPlot)
+
+pdf('C:\\Users\\kebisu\\Downloads\\PMTrend_BarPlot.pdf',15,10)
+	grid.draw(Plot1)
+	grid.newpage()
+	grid.draw(BarPlot)
+dev.off()
+
+rm(list=ls())
